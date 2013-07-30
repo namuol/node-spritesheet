@@ -45,6 +45,7 @@ class SpriteSheetBuilder
     
       for key of outputConfigurations
         config = outputConfigurations[ key ]
+        config.outputDirectory = builder.outputDirectory
         builder.addConfiguration( key, config )
       
     return builder
@@ -58,11 +59,23 @@ class SpriteSheetBuilder
       @outputStyleFilePath        = [ @outputDirectory, options.outputCss ].join( separator )
       @outputStyleDirectoryPath   = path.dirname( @outputStyleFilePath )
 
+    if options.outputJson
+      @outputJsonFilePath         = [ @outputDirectory, options.outputJson ].join( separator )
+      @outputJsonDirectoryPath    = path.dirname( @outputJsonFilePath )
+
   addConfiguration: ( name, options ) ->
+    if options.outputJson
+      outputJsonFilePath         = [ options.outputDirectory, options.outputJson ].join( separator )
+      outputJsonDirectoryPath    = path.dirname( outputJsonFilePath )
+    else
+      outputJsonFilePath         = @outputJsonFilePath
+      outputJsonDirectoryPath    = @outputJsonDirectoryPath
     config = _.extend @options, options,
       name: name,
       outputStyleFilePath: @outputStyleFilePath
       outputStyleDirectoryPath: @outputStyleDirectoryPath
+      outputJsonFilePath: outputJsonFilePath
+      outputJsonDirectoryPath: outputJsonDirectoryPath
 
     ssc = new SpriteSheetConfiguration( options.images || @files, config )
     
@@ -76,8 +89,7 @@ class SpriteSheetBuilder
     return ssc
 
   build: ( done ) ->
-    throw "no output style file specified"  if !@outputStyleFilePath
-  
+    throw "no output file[s] specified"  if !@outputStyleFilePath and !@outputJsonFilePath and !Object.keys(@outputConfigurations)
     if Object.keys( @outputConfigurations ).length is 0
       # If no configurations are supplied, we need to supply a default.
       @addConfiguration( "default", { pixelRatio: 1 } )
@@ -100,9 +112,8 @@ class SpriteSheetBuilder
     async.series [
       ( callback ) =>
         async.forEachSeries @configs, @buildConfig, callback
-      
-      ensureDirectory( @outputStyleDirectoryPath )
       @writeStyleSheet
+      @writeJSON
     ],
     done
   
@@ -110,20 +121,46 @@ class SpriteSheetBuilder
     config.build( callback )
 
   writeStyleSheet: ( callback ) =>
-    css = @configs.map ( config ) -> config.css
-    
-    fs.writeFile @outputStyleFilePath, css.join( "\n\n" ), ( err ) =>
-      if err
-        throw err
-      else
-        console.log "CSS file written to", @outputStyleFilePath, "\n"
-        callback()
+    if not @outputStyleFilePath?
+      callback()
+      return
+    afterDirectoryCreated = ensureDirectory @outputStyleDirectoryPath
+    afterDirectoryCreated =>
+      css = @configs.map ( config ) -> config.css
+      
+      fs.writeFile @outputStyleFilePath, css.join( "\n\n" ), ( err ) =>
+        if err
+          throw err
+        else
+          console.log "CSS file written to", @outputStyleFilePath, "\n"
+          callback()
 
+  writeJSON: ( callback ) =>
+    jsonBuilders = []
+    for _config in @configs
+      do =>
+        config = _config
+        builder = (cb) =>
+          if not config.outputJsonFilePath?
+            cb()
+            return
+          afterDirectoryCreated = ensureDirectory config.outputJsonDirectoryPath
+          afterDirectoryCreated =>
+            fs.writeFile config.outputJsonFilePath, config.json, ( err ) =>
+              if err
+                console.error err
+                throw err
+              else
+                console.log "JSON file written to", config.outputJsonFilePath, "\n"
+                cb()
+        jsonBuilders.push builder
+
+    async.series jsonBuilders, callback
 
 class SpriteSheetConfiguration
 
   constructor: ( files, options ) ->
-    throw "no selector specified" if !options.selector
+    throw "no selector specified"  if options.outputStyleFilePath and !options.selector
     
     @images = []
     @filter = options.filter
@@ -152,10 +189,15 @@ class SpriteSheetConfiguration
     if options.outputStyleFilePath
       @outputStyleFilePath        = options.outputStyleFilePath
 
+    if options.outputJsonFilePath
+      @outputJsonFilePath         = options.outputJsonFilePath
+      @jsonImagePath              = options.jsonImagePath ? path.relative( @outputDirectory, @outputImageFilePath )
+      @jsonBaseImagesPath         = options.jsonBaseImagesPath ? path.relative( @outputDirectory, @outputImageDirectoryPath )
+
     @style = new Style( options )
 
   build: ( callback ) =>
-    throw "No output image file specified"    if !@outputImageFilePath
+    throw "no output file[s] specified"  if !@outputStyleFilePath and !@outputJsonFilePath 
     
     console.log "--------------------------------------------------------------"
     console.log "Building '#{ @name }' at pixel ratio #{ @pixelRatio }"
@@ -175,8 +217,9 @@ class SpriteSheetConfiguration
       
       console.log @summary()
       
-      @generateCSS()
-      
+      @generateCSS()  if @outputStyleFilePath
+      @generateJSON()  if @outputJsonFilePath
+
       async.series [
         ensureDirectory( @outputImageDirectoryPath )
         @createSprite
@@ -215,6 +258,22 @@ class SpriteSheetConfiguration
       pixelRatio: @pixelRatio
       width: @layout.width
       height: @layout.height
+  
+  generateJSON: =>
+    result =
+      meta:
+        scale: @pixelRatio
+        image: @jsonImagePath
+    result.frames = {}
+    for image in @images
+      imagePath = if @jsonBaseImagesPath then [ @jsonBaseImagesPath, image.filename ].join separator else image.filename
+      result.frames[imagePath] =
+        frame:
+          w: image.cssw
+          h: image.cssh
+          x: image.cssx
+          y: image.cssy
+    @json = JSON.stringify result
 
   createSprite: ( callback ) =>
     ImageMagick.composite(

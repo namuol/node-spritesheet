@@ -17,7 +17,30 @@ module.exports = function(grunt) {
                     'bin': 'src/img/flags/*'
                 }
             },
-            
+
+            //
+            // JSON only.
+            //
+            flags_json_only: {
+                options: {
+                    output: {
+                        legacy: {
+                            outputImage: 'sprite/img/flags.png',
+                            outputJson: 'sprite/img/flags.json',
+                            pixelRatio: 1
+                        },
+                        retina: {
+                            outputImage: 'sprite/img/flags-retina.png',
+                            outputJson: 'sprite/img/flags-retina.json',
+                            pixelRatio: 2
+                        }
+                    }
+                },
+                files: {
+                    'bin': 'src/img/flags/*'
+                }
+            },
+
             //
             // Complex example with multiple pixel ratios. Uses automatic
             // image resampling.
